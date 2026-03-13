@@ -1,6 +1,10 @@
 streamlit
 langchain
+langchain-core
+langchain-community
 langchain-groq
 faiss-cpu
 PyPDF2
 sentence-transformers
+transformers
+torch
