@@ -1,6 +1,4 @@
 import base64
-import io
-import os
 import time
 
 import streamlit as st
@@ -32,10 +30,8 @@ if not GROQ_API_KEY:
 # ---------------------------
 st.sidebar.header("Hiperparámetros")
 
-# Ajusta estos nombres si en tu cuenta Groq aparecen otros modelos
 MODEL_OPTIONS = {
     "Llama-3-70b": "llama-3.3-70b-versatile",
-    # Si Mixtral no está disponible en tu cuenta, cámbialo por otro modelo activo
     "Mixtral-8x7b": "mixtral-8x7b-32768",
 }
 
@@ -45,6 +41,11 @@ selected_model = MODEL_OPTIONS[selected_label]
 temperature = st.sidebar.slider("Temperature", 0.0, 1.0, 0.2, 0.1)
 chunk_size = st.sidebar.slider("Chunk Size", 20, 2000, 800, 20)
 top_k = st.sidebar.slider("Top-K", 1, 10, 3, 1)
+
+# Parámetros default para RAG estándar
+DEFAULT_CHUNK_SIZE = 500
+DEFAULT_TOP_K = 3
+DEFAULT_TEMPERATURE = 0.2
 
 st.sidebar.markdown("---")
 st.sidebar.write("**OCR / visión:**")
@@ -198,50 +199,99 @@ if st.button("Procesar y comparar"):
         st.error("No se pudo extraer texto del archivo.")
         st.stop()
 
-    with st.spinner("Construyendo chunks, embeddings y FAISS..."):
-        docs = split_into_chunks(raw_text, chunk_size)
-        vectorstore = build_vectorstore(docs)
-        retrieved_docs = vectorstore.similarity_search(question, k=top_k)
+    with st.spinner("Construyendo índices para RAG estándar y RAG optimizado..."):
+        # RAG estándar
+        default_docs = split_into_chunks(raw_text, DEFAULT_CHUNK_SIZE)
+        default_vectorstore = build_vectorstore(default_docs)
+        default_retrieved_docs = default_vectorstore.similarity_search(question, k=DEFAULT_TOP_K)
 
-    col1, col2 = st.columns(2)
+        # RAG optimizado
+        optimized_docs = split_into_chunks(raw_text, chunk_size)
+        optimized_vectorstore = build_vectorstore(optimized_docs)
+        optimized_retrieved_docs = optimized_vectorstore.similarity_search(question, k=top_k)
+
+    col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.subheader("Zero-shot")
+        st.subheader("LLM Simple")
+        st.caption("Inferencia sin contexto")
         start = time.time()
         try:
-            zero_shot_answer = run_zero_shot(question, selected_model, temperature)
+            zero_shot_answer = run_zero_shot(question, selected_model, DEFAULT_TEMPERATURE)
         except Exception as e:
-            zero_shot_answer = f"Error en Zero-shot: {e}"
+            zero_shot_answer = f"Error en LLM Simple: {e}"
         zero_time = time.time() - start
         st.write(zero_shot_answer)
         st.caption(f"Tiempo: {zero_time:.2f} s")
+        st.caption(f"temperature={DEFAULT_TEMPERATURE}")
 
     with col2:
-        st.subheader("RAG")
+        st.subheader("RAG Estándar")
+        st.caption("RAG con parámetros default")
         start = time.time()
         try:
-            rag_answer = run_rag(question, retrieved_docs, selected_model, temperature)
+            rag_default_answer = run_rag(
+                question,
+                default_retrieved_docs,
+                selected_model,
+                DEFAULT_TEMPERATURE
+            )
         except Exception as e:
-            rag_answer = f"Error en RAG: {e}"
-        rag_time = time.time() - start
-        st.write(rag_answer)
-        st.caption(f"Tiempo: {rag_time:.2f} s")
+            rag_default_answer = f"Error en RAG Estándar: {e}"
+        rag_default_time = time.time() - start
+        st.write(rag_default_answer)
+        st.caption(f"Tiempo: {rag_default_time:.2f} s")
+        st.caption(
+            f"chunk_size={DEFAULT_CHUNK_SIZE} | top_k={DEFAULT_TOP_K} | temperature={DEFAULT_TEMPERATURE}"
+        )
+
+    with col3:
+        st.subheader("RAG Optimizado")
+        st.caption("RAG con el ajuste del Sidebar")
+        start = time.time()
+        try:
+            rag_optimized_answer = run_rag(
+                question,
+                optimized_retrieved_docs,
+                selected_model,
+                temperature
+            )
+        except Exception as e:
+            rag_optimized_answer = f"Error en RAG Optimizado: {e}"
+        rag_optimized_time = time.time() - start
+        st.write(rag_optimized_answer)
+        st.caption(f"Tiempo: {rag_optimized_time:.2f} s")
+        st.caption(
+            f"chunk_size={chunk_size} | top_k={top_k} | temperature={temperature}"
+        )
 
     st.markdown("---")
     st.subheader("Diagnóstico del pipeline")
 
     st.write(f"**Método de ingesta/OCR:** {ingestion_method}")
     st.write(f"**Modelo de generación:** {selected_model}")
-    st.write(f"**Temperature:** {temperature}")
-    st.write(f"**Chunk size:** {chunk_size}")
-    st.write(f"**Top-K:** {top_k}")
-    st.write(f"**Cantidad de chunks generados:** {len(docs)}")
+    st.write(
+        f"**Parámetros RAG estándar:** chunk_size={DEFAULT_CHUNK_SIZE}, "
+        f"top_k={DEFAULT_TOP_K}, temperature={DEFAULT_TEMPERATURE}"
+    )
+    st.write(
+        f"**Parámetros RAG optimizado:** chunk_size={chunk_size}, "
+        f"top_k={top_k}, temperature={temperature}"
+    )
+    st.write(f"**Cantidad de chunks RAG estándar:** {len(default_docs)}")
+    st.write(f"**Cantidad de chunks RAG optimizado:** {len(optimized_docs)}")
 
     with st.expander("Texto extraído"):
         st.text(raw_text[:12000])
 
-    with st.expander("Chunks recuperados para RAG"):
-        for i, doc in enumerate(retrieved_docs, start=1):
+    with st.expander("Chunks recuperados para RAG estándar"):
+        for i, doc in enumerate(default_retrieved_docs, start=1):
+            st.markdown(f"**Fragmento {i}**")
+            st.write(doc.page_content)
+            st.markdown("---")
+
+    with st.expander("Chunks recuperados para RAG optimizado"):
+        for i, doc in enumerate(optimized_retrieved_docs, start=1):
             st.markdown(f"**Fragmento {i}**")
             st.write(doc.page_content)
             st.markdown("---")
